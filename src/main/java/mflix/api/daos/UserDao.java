@@ -21,7 +21,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 
+import javax.swing.event.DocumentEvent;
 import java.text.MessageFormat;
+import java.util.HashMap;
 import java.util.Map;
 
 import static org.bson.codecs.configuration.CodecRegistries.fromProviders;
@@ -33,7 +35,7 @@ public class UserDao extends AbstractMFlixDao {
   private final MongoCollection<User> usersCollection;
   //TODO> Ticket: User Management - do the necessary changes so that the sessions collection
   //returns a Session object
-  private final MongoCollection<Document> sessionsCollection;
+  private final MongoCollection<Session> sessionsCollection;
 
   private final Logger log;
 
@@ -50,7 +52,7 @@ public class UserDao extends AbstractMFlixDao {
     log = LoggerFactory.getLogger(this.getClass());
     //TODO> Ticket: User Management - implement the necessary changes so that the sessions
     // collection returns a Session objects instead of Document objects.
-    sessionsCollection = db.getCollection("sessions");
+    sessionsCollection = db.getCollection("sessions", Session.class).withCodecRegistry(pojoCodecRegistry);
   }
 
   /**
@@ -61,8 +63,13 @@ public class UserDao extends AbstractMFlixDao {
    */
   public boolean addUser(User user) {
     //TODO > Ticket: Durable Writes -  you might want to use a more durable write concern here!
-    usersCollection.insertOne(user);
-    return true;
+    try {
+      usersCollection.insertOne(user);
+      return true;
+    }
+    catch (Exception ex){
+      throw new IncorrectDaoOperation(String.format("User %s wasn't added", user.getName()), ex);
+    }
     //TODO > Ticket: Handling Errors - make sure to only add new users
     // and not users that already exist.
 
@@ -78,7 +85,18 @@ public class UserDao extends AbstractMFlixDao {
   public boolean createUserSession(String userId, String jwt) {
     //TODO> Ticket: User Management - implement the method that allows session information to be
     // stored in it's designated collection.
-    return false;
+    Bson filter = new Document("user_id", userId);
+    Bson update = Updates.set("jwt", jwt);
+
+    UpdateOptions options = new UpdateOptions().upsert(true);
+    try{
+      UpdateResult updateResult = sessionsCollection.updateOne(filter,update, options);
+      return updateResult.wasAcknowledged();
+    }
+    catch (MongoWriteException ex){
+      return false;
+    }
+
     //TODO > Ticket: Handling Errors - implement a safeguard against
     // creating a session with the same jwt token.
   }
@@ -90,9 +108,9 @@ public class UserDao extends AbstractMFlixDao {
    * @return User object or null.
    */
   public User getUser(String email) {
-    User user = null;
     //TODO> Ticket: User Management - implement the query that returns the first User object.
-    return user;
+
+    return usersCollection.find(new Document("email", email)).first();
   }
 
   /**
@@ -104,12 +122,14 @@ public class UserDao extends AbstractMFlixDao {
   public Session getUserSession(String userId) {
     //TODO> Ticket: User Management - implement the method that returns Sessions for a given
     // userId
-    return null;
+    return sessionsCollection.find(new Document("user_id", userId)).first();
   }
 
   public boolean deleteUserSessions(String userId) {
     //TODO> Ticket: User Management - implement the delete user sessions method
-    return false;
+    Bson filter = new Document("user_id", userId);
+    DeleteResult deleteResult = sessionsCollection.deleteOne(filter);
+    return deleteResult.wasAcknowledged();
   }
 
   /**
@@ -123,7 +143,13 @@ public class UserDao extends AbstractMFlixDao {
     //TODO> Ticket: User Management - implement the delete user method
     //TODO > Ticket: Handling Errors - make this method more robust by
     // handling potential exceptions.
-    return false;
+    if(deleteUserSessions(email)) {
+      Bson deleteFilter = new Document("email", email);
+      DeleteResult deleteResult = usersCollection.deleteOne(deleteFilter);
+      return deleteResult.wasAcknowledged();
+    }
+    else
+      return false;
   }
 
   /**
@@ -139,6 +165,23 @@ public class UserDao extends AbstractMFlixDao {
     // be updated.
     //TODO > Ticket: Handling Errors - make this method more robust by
     // handling potential exceptions when updating an entry.
-    return false;
+
+    if(userPreferences == null)
+      throw new IncorrectDaoOperation("no user preferences");
+
+    Bson filter = new Document("email", email);
+    User userToupdatePrefs = usersCollection.find(filter).first();
+    if(userToupdatePrefs == null)
+      throw new IncorrectDaoOperation("no user to update");
+    Map<String, String> oldPrefs = userToupdatePrefs.getPreferences();
+    if(oldPrefs == null)
+      oldPrefs = new HashMap<>();
+    for(Map.Entry<String, ?> entry : userPreferences.entrySet()){
+        oldPrefs.put(entry.getKey(),entry.getValue().toString());
+    }
+
+    UpdateResult result = usersCollection.updateOne(filter,Updates.set("preferences", oldPrefs));
+    return result.wasAcknowledged();
+
   }
 }

@@ -5,10 +5,7 @@ import com.mongodb.MongoWriteException;
 import com.mongodb.ReadConcern;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
-import com.mongodb.client.model.Aggregates;
-import com.mongodb.client.model.Filters;
-import com.mongodb.client.model.Sorts;
-import com.mongodb.client.model.Updates;
+import com.mongodb.client.model.*;
 import com.mongodb.client.result.DeleteResult;
 import com.mongodb.client.result.UpdateResult;
 import mflix.api.models.Comment;
@@ -26,6 +23,7 @@ import org.springframework.stereotype.Component;
 
 import java.text.MessageFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 
@@ -84,7 +82,14 @@ public class CommentDao extends AbstractMFlixDao {
     // comment.
     // TODO> Ticket - Handling Errors: Implement a try catch block to
     // handle a potential write exception when given a wrong commentId.
-    return null;
+    try {
+      commentCollection.insertOne(comment);
+      comment = getComment(comment.getId());
+      return comment;
+    }
+    catch (Exception ex){
+      throw new IncorrectDaoOperation("Error during add comment");
+    }
   }
 
   /**
@@ -106,7 +111,23 @@ public class CommentDao extends AbstractMFlixDao {
     // user own comments
     // TODO> Ticket - Handling Errors: Implement a try catch block to
     // handle a potential write exception when given a wrong commentId.
-    return false;
+
+    Bson filter = Filters.and(
+            Filters.eq("email",email),
+            Filters.eq("_id", new ObjectId(commentId))
+    );
+
+    Bson update = Updates.set("text", text);
+
+    UpdateOptions options = new UpdateOptions().upsert(true);
+    try {
+      UpdateResult result = commentCollection.updateOne(filter, update, options);
+      return result.wasAcknowledged();
+    }
+    catch (MongoWriteException ex){
+      return  false;
+    }
+
   }
 
   /**
@@ -117,12 +138,15 @@ public class CommentDao extends AbstractMFlixDao {
    * @return true if successful deletes the comment.
    */
   public boolean deleteComment(String commentId, String email) {
-    // TODO> Ticket Delete Comments - Implement the method that enables the deletion of a user
-    // comment
-    // TIP: make sure to match only users that own the given commentId
-    // TODO> Ticket Handling Errors - Implement a try catch block to
-    // handle a potential write exception when given a wrong commentId.
-    return false;
+    Bson filter = Filters.and(
+            Filters.eq("email", email),
+            Filters.eq("_id", new ObjectId(commentId)));
+    try {
+      DeleteResult deleteResult = commentCollection.deleteOne(filter);
+      return deleteResult.getDeletedCount() != 0;
+    } catch (MongoWriteException e) {
+      return false;
+    }
   }
 
   /**
@@ -140,6 +164,14 @@ public class CommentDao extends AbstractMFlixDao {
     // // guarantee for the returned documents. Once a commenter is in the
     // // top 20 of users, they become a Critic, so mostActive is composed of
     // // Critic objects.
-    return mostActive;
+    Bson groupStage = Aggregates.group("$email", Accumulators.sum("count", 1));
+    Bson limit = Aggregates.limit(20);
+    Bson sortStage = Aggregates.sort(Sorts.descending("count"));
+
+    return commentCollection
+            .withReadConcern(ReadConcern.MAJORITY)
+            .aggregate(Arrays.asList(groupStage,sortStage,limit), Critic.class)
+            .into(new ArrayList<>());
+
   }
 }

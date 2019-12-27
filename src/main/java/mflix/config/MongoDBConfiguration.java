@@ -23,11 +23,15 @@ public class MongoDBConfiguration {
   public MongoClient mongoClient(@Value("${spring.mongodb.uri}") String connectionString) {
 
     ConnectionString connString = new ConnectionString(connectionString);
-
+    WriteConcern writeConcern = WriteConcern.MAJORITY.withWTimeout(2500, TimeUnit.MILLISECONDS);
     //TODO> Ticket: Handling Timeouts - configure the expected
     // WriteConcern `wtimeout` and `connectTimeoutMS` values
-    MongoClient mongoClient = MongoClients.create(connectionString);
+    MongoClientSettings mongoClientSettings = MongoClientSettings
+            .builder()
+            .applyConnectionString(connString)
+            .writeConcern(writeConcern)
+            .build();
 
-    return mongoClient;
+    return MongoClients.create(mongoClientSettings);
   }
 }
